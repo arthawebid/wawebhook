@@ -3,12 +3,29 @@ from datetime import datetime
 import json
 import os
 import threading
+import requests
+import time
 
 app = Flask(__name__)
 
 DATA_DIR = "data"
-SESSION_FILE = os.path.join(DATA_DIR, "sessions02.json")
-MESSAGE_FILE = os.path.join(DATA_DIR, "messages02.json")
+SESSION_FILE = os.path.join(DATA_DIR, "sessions03.json")
+MESSAGE_FILE = os.path.join(DATA_DIR, "messages03.json")
+
+# =========================
+# CONFIG N8N
+# =========================
+
+N8N_SESSION_WEBHOOK = "https://n8n.app.bkr/webhook-test/session"
+N8N_MESSAGE_WEBHOOK = "https://n8n.app.bkr/webhook-test/message"
+
+# Jika sudah install CA ke system → pakai True
+#VERIFY_SSL = True
+# Jika belum → isi path CA mkcert
+VERIFY_SSL = "/home/dev/.local/share/mkcert/rootCA.pem"
+
+REQUEST_TIMEOUT = 10
+RETRY_COUNT = 3
 
 lock = threading.Lock()
 
@@ -60,6 +77,31 @@ def append_json(path, payload):
 
 
 # =========================
+# Forward to n8n
+# =========================
+
+def forward_to_n8n(url, payload):
+    for attempt in range(RETRY_COUNT):
+        try:
+            response = requests.post(
+                url,
+                json=payload,
+                timeout=REQUEST_TIMEOUT,
+                verify=VERIFY_SSL
+            )
+
+            log(f"Forwarded to n8n → {response.status_code}")
+            return response.status_code
+
+        except Exception as e:
+            log(f"Forward attempt {attempt+1} failed: {e}")
+            time.sleep(2)
+
+    log("All retries failed")
+    return None
+
+
+# =========================
 # Routes
 # =========================
 
@@ -69,7 +111,6 @@ def webhook_session():
         data = request.get_json(force=True, silent=True)
 
         if not data:
-            log("Invalid session JSON")
             return jsonify({"error": "Invalid JSON"}), 400
 
         log(f"SESSION EVENT: {data}")
@@ -82,6 +123,9 @@ def webhook_session():
         }
 
         append_json(SESSION_FILE, record)
+
+        # Forward ke n8n
+        forward_to_n8n(N8N_SESSION_WEBHOOK, record)
 
         return jsonify({"ok": True})
 
@@ -96,7 +140,6 @@ def webhook_message():
         data = request.get_json(force=True, silent=True)
 
         if not data:
-            log("Invalid message JSON")
             return jsonify({"error": "Invalid JSON"}), 400
 
         log(f"MESSAGE EVENT: {data}")
@@ -111,6 +154,9 @@ def webhook_message():
 
         append_json(MESSAGE_FILE, record)
 
+        # Forward ke n8n
+        forward_to_n8n(N8N_MESSAGE_WEBHOOK, record)
+
         return jsonify({"ok": True})
 
     except Exception as e:
@@ -120,7 +166,7 @@ def webhook_message():
 
 @app.route("/")
 def home():
-    return "WA Webhook Server Running"
+    return "WA Webhook Server Running with n8n Forward"
 
 
 # =========================
@@ -129,4 +175,4 @@ def home():
 
 if __name__ == "__main__":
     ensure_storage()
-    app.run(host="0.0.0.0", port=3235)
+    app.run(host="0.0.0.0", port=3335)
